@@ -230,8 +230,8 @@ func (p *party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 	if p.shareData == nil {
 		return nil, fmt.Errorf("must call SetShareData() before attempting to sign")
 	}
-	p.logger.Debugf("Starting signing")
-	defer p.logger.Debugf("Finished signing")
+	//p.logger.Debugf("Starting signing")
+	defer func() {}() //p.logger.Debugf("")
 
 	defer close(p.closeChan)
 
@@ -282,7 +282,7 @@ func (p *party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 				p.logger.Warnf("Received error when serializing message: %v", err)
 				continue
 			}
-			p.logger.Debugf("%s Got message from %s", p.id.Id, routing.From.Id)
+			//p.logger.Debugf("%s Got message from %s", p.id.Id, routing.From.Id)
 			ok, err := party.UpdateFromBytes(raw, routing.From, routing.IsBroadcast)
 			if !ok {
 				p.logger.Warnf("Received error when updating party: %v", err.Error())
@@ -293,8 +293,8 @@ func (p *party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 }
 
 func (p *party) KeyGen(ctx context.Context) ([]byte, error) {
-	p.logger.Debugf("Starting DKG")
-	defer p.logger.Debugf("Finished DKG")
+	//p.logger.Debugf("Starting DKG")
+	defer func() {}() //p.logger.Debugf("")
 
 	defer close(p.closeChan)
 
@@ -341,7 +341,7 @@ func (p *party) KeyGen(ctx context.Context) ([]byte, error) {
 				p.logger.Warnf("Received error when serializing message: %v", err)
 				continue
 			}
-			p.logger.Debugf("%s Got message from %s", p.id.Id, routing.From.Id)
+			//p.logger.Debugf("%s Got message from %s", p.id.Id, routing.From.Id)
 			ok, err := party.UpdateFromBytes(raw, routing.From, routing.IsBroadcast)
 			if !ok {
 				p.logger.Warnf("Received error when updating party: %v", err.Error())

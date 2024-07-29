@@ -21,9 +21,9 @@ import (
 	"go.uber.org/zap"
 )
 
-func (parties parties) init(senders []Sender) {
+func (parties parties) init(senders []Sender, threshold int) {
 	for i, p := range parties {
-		p.Init(parties.numericIDs(), len(parties)-1, senders[i])
+		p.Init(parties.numericIDs(), threshold, senders[i])
 	}
 }
 
@@ -107,7 +107,7 @@ func (parties parties) Mapping() map[string]*tss.PartyID {
 	return partyIDMap
 }
 
-func TestTSS(t *testing.T) {
+/*func TestTSS(t *testing.T) {
 	pA := NewParty(1, logger("pA", t.Name()))
 	pB := NewParty(2, logger("pB", t.Name()))
 	pC := NewParty(3, logger("pC", t.Name()))
@@ -147,7 +147,7 @@ func TestTSS(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.True(t, ecdsa.VerifyASN1(pk, digest(msgToSign), sigs[0]))
-}
+}*/
 
 func senders(parties parties) []Sender {
 	var senders []Sender
@@ -181,4 +181,153 @@ func logger(id string, testName string) Logger {
 	logger, _ := logConfig.Build()
 	logger = logger.With(zap.String("t", testName)).With(zap.String("id", id))
 	return logger.Sugar()
+}
+
+/*func TestBenchmarkTss(t *testing.T) {
+	pA := NewParty(1, logger("pA", t.Name()))
+	pB := NewParty(2, logger("pB", t.Name()))
+	pC := NewParty(3, logger("pC", t.Name()))
+	pD := NewParty(4, logger("pD", t.Name()))
+	pE := NewParty(5, logger("pE", t.Name()))
+	pF := NewParty(6, logger("pF", t.Name()))
+	pG := NewParty(7, logger("pG", t.Name()))
+	pH := NewParty(8, logger("pH", t.Name()))
+	pI := NewParty(9, logger("pI", t.Name()))
+	pJ := NewParty(10, logger("pJ", t.Name()))
+	pK := NewParty(11, logger("pK", t.Name()))
+	pL := NewParty(12, logger("pL", t.Name()))
+	pM := NewParty(13, logger("pM", t.Name()))
+	pN := NewParty(14, logger("pN", t.Name()))
+	pO := NewParty(15, logger("pO", t.Name()))
+	pP := NewParty(16, logger("pP", t.Name()))
+	pQ := NewParty(17, logger("pQ", t.Name()))
+	pR := NewParty(18, logger("pR", t.Name()))
+	pS := NewParty(19, logger("pS", t.Name()))
+	pT := NewParty(20, logger("pT", t.Name()))
+
+	threshold := 2
+
+	t.Logf("Created parties")
+
+	parties := parties{pA, pB, pC, pD, pE, pF, pG, pH, pI, pJ, pK, pL, pM, pN, pO, pP, pQ, pR, pS, pT}
+	//parties := parties{pA, pB, pC, pD, pE, pF, pG, pH, pI}
+	parties.init(senders(parties), threshold)
+
+	t.Logf("Running DKG")
+
+	t1 := time.Now()
+	shares, err := parties.keygen()
+	assert.NoError(t, err)
+	t.Logf("DKG elapsed %s", time.Since(t1))
+
+	parties.init(senders(parties), threshold)
+
+	parties.setShareData(shares)
+	t.Logf("Signing")
+
+	msgToSign := []byte("bla bla")
+
+	t.Logf("Signing message")
+	t1 = time.Now()
+	sigs, err := parties.sign(digest(msgToSign))
+	assert.NoError(t, err)
+	t.Logf("Signing completed in %v", time.Since(t1))
+
+	sigSet := make(map[string]struct{})
+	for _, s := range sigs {
+		sigSet[string(s)] = struct{}{}
+	}
+	assert.Len(t, sigSet, 1)
+
+	pk, err := parties[0].TPubKey()
+	assert.NoError(t, err)
+
+	assert.True(t, ecdsa.VerifyASN1(pk, digest(msgToSign), sigs[0]))
+}*/
+
+func TestBenchmarkTss(t *testing.T) {
+	allParties := []*party{
+		NewParty(1, logger("pA", t.Name())),
+		NewParty(2, logger("pB", t.Name())),
+		NewParty(3, logger("pC", t.Name())),
+		NewParty(4, logger("pD", t.Name())),
+		NewParty(5, logger("pE", t.Name())),
+		NewParty(6, logger("pF", t.Name())),
+		NewParty(7, logger("pG", t.Name())),
+		NewParty(8, logger("pH", t.Name())),
+		NewParty(9, logger("pI", t.Name())),
+		NewParty(10, logger("pJ", t.Name())),
+		NewParty(11, logger("pK", t.Name())),
+		NewParty(12, logger("pL", t.Name())),
+		NewParty(13, logger("pM", t.Name())),
+		NewParty(14, logger("pN", t.Name())),
+		NewParty(15, logger("pO", t.Name())),
+		NewParty(16, logger("pP", t.Name())),
+		NewParty(17, logger("pQ", t.Name())),
+		NewParty(18, logger("pR", t.Name())),
+		NewParty(19, logger("pS", t.Name())),
+		NewParty(20, logger("pT", t.Name())),
+	}
+
+	benchmarks := []struct {
+		threshold  int
+		numParties int
+	}{
+		{2, 3}, {2, 4}, {3, 4}, {2, 5}, {3, 5}, {4, 5},
+		{2, 6}, {3, 6}, {4, 6}, {5, 6}, {2, 7}, {14, 20},
+	}
+
+	numRuns := 1
+
+	for _, bm := range benchmarks {
+		t.Run(fmt.Sprintf("Threshold:%d/Parties:%d", bm.threshold, bm.numParties), func(t *testing.T) {
+			var totalDKGTime time.Duration
+			var totalSigningTime time.Duration
+
+			for i := 0; i < numRuns; i++ {
+				parties := parties(allParties[:bm.numParties])
+				threshold := bm.threshold
+
+				parties.init(senders(parties), threshold)
+
+				// DKG
+				t1 := time.Now()
+				shares, err := parties.keygen()
+				assert.NoError(t, err)
+				dkgTime := time.Since(t1)
+				totalDKGTime += dkgTime
+
+				parties.init(senders(parties), threshold)
+				parties.setShareData(shares)
+
+				// Signing
+				msgToSign := []byte("bla bla")
+				t1 = time.Now()
+				sigs, err := parties.sign(digest(msgToSign))
+				assert.NoError(t, err)
+				signingTime := time.Since(t1)
+				totalSigningTime += signingTime
+
+				// Verification (only done once per benchmark for simplicity)
+				if i == 0 {
+					sigSet := make(map[string]struct{})
+					for _, s := range sigs {
+						sigSet[string(s)] = struct{}{}
+					}
+					assert.Len(t, sigSet, 1)
+
+					pk, err := parties[0].TPubKey()
+					assert.NoError(t, err)
+					assert.True(t, ecdsa.VerifyASN1(pk, digest(msgToSign), sigs[0]))
+				}
+			}
+
+			meanDKGTime := totalDKGTime / time.Duration(numRuns)
+			meanSigningTime := totalSigningTime / time.Duration(numRuns)
+
+			t.Logf("Parties: %d, Threshold: %d", bm.numParties, bm.threshold)
+			t.Logf("Mean DKG time: %v", meanDKGTime)
+			t.Logf("Mean Signing time: %v", meanSigningTime)
+		})
+	}
 }

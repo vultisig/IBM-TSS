@@ -4,54 +4,79 @@ Copyright IBM Corp. All Rights Reserved.
 SPDX-License-Identifier: Apache-2.0
 */
 
-package ecdsa
+package swingBy
 
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
 	"sync"
+	"time"
 
-	"github.com/bnb-chain/tss-lib/v2/common"
-	"github.com/bnb-chain/tss-lib/v2/eddsa/keygen"
-	"github.com/bnb-chain/tss-lib/v2/eddsa/signing"
-	"github.com/bnb-chain/tss-lib/v2/tss"
-	"github.com/decred/dcrd/dcrec/edwards/v2"
+	"github.com/binance-chain/tss-lib/common"
+	"github.com/binance-chain/tss-lib/ecdsa/keygen"
+	"github.com/binance-chain/tss-lib/ecdsa/signing"
+	"github.com/binance-chain/tss-lib/tss"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes/any"
+	/*"github.com/SwingbyProtocol/tss-lib/common"
+	"github.com/SwingbyProtocol/tss-lib/ecdsa/keygen"
+	"github.com/SwingbyProtocol/tss-lib/ecdsa/signing"*/)
+
+const (
+	// defaultSafePrimeGenTimeout is the default time allocated for the library to sample the Paillier public key
+	defaultSafePrimeGenTimeout = 5 * time.Minute
 )
 
 func init() {
-	tss.SetCurve(tss.Edwards())
+	tss.RegisterCurve("elliptic.p256Curve", elliptic.P256())
 }
 
 var (
 	msgURL2Round = map[string]uint8{
 		// DKG
-		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound1Message":  1,
-		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message1": 2,
-		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message2": 3,
+		"type.googleapis.com/binance.tsslib.ecdsa.keygen.KGRound1Message":  1,
+		"type.googleapis.com/binance.tsslib.ecdsa.keygen.KGRound2Message1": 2,
+		"type.googleapis.com/binance.tsslib.ecdsa.keygen.KGRound2Message2": 3,
+		"type.googleapis.com/binance.tsslib.ecdsa.keygen.KGRound3Message":  4,
 
 		// Signing
-		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound1Message": 5,
-		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound2Message": 6,
-		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound3Message": 7,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound1Message1": 5,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound1Message2": 6,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound2Message":  7,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound3Message":  8,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound4Message":  9,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound5Message":  10,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound6Message":  11,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound7Message":  12,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound8Message":  13,
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound9Message":  14,
 	}
 
 	broadcastMessages = map[string]struct{}{
 		// DKG
-		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound1Message":  {},
-		"type.googleapis.com/binance.tsslib.eddsa.keygen.KGRound2Message2": {},
+		"type.googleapis.com/binance.tsslib.ecdsa.keygen.KGRound1Message":  {},
+		"type.googleapis.com/binance.tsslib.ecdsa.keygen.KGRound2Message2": {},
+		"type.googleapis.com/binance.tsslib.ecdsa.keygen.KGRound3Message":  {},
 
 		// Signing
-		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound1Message": {},
-		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound2Message": {},
-		"type.googleapis.com/binance.tsslib.eddsa.signing.SignRound3Message": {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound1Message2": {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound3Message":  {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound4Message":  {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound5Message":  {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound6Message":  {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound7Message":  {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound8Message":  {},
+		"type.googleapis.com/binance.tsslib.ecdsa.signing.SignRound9Message":  {},
 	}
 )
 
@@ -148,21 +173,26 @@ func (p *party) OnMsg(msgBytes []byte, from uint16, broadcast bool) {
 	p.in <- msg
 }
 
-func (p *party) ThresholdPK() ([]byte, error) {
+func (p *party) TPubKey() (*ecdsa.PublicKey, error) {
 	if p.shareData == nil {
 		return nil, fmt.Errorf("must call SetShareData() before attempting to sign")
 	}
 
-	pk := p.shareData.EDDSAPub
+	pk := p.shareData.ECDSAPub
 
-	edPK := &edwards.PublicKey{
-		Curve: tss.Edwards(),
+	return &ecdsa.PublicKey{
+		Curve: pk.Curve(),
 		X:     pk.X(),
 		Y:     pk.Y(),
-	}
+	}, nil
+}
 
-	pkBytes := copyBytes(edPK.Serialize())
-	return pkBytes[:], nil
+func (p *party) ThresholdPK() ([]byte, error) {
+	pk, err := p.TPubKey()
+	if err != nil {
+		return nil, err
+	}
+	return x509.MarshalPKIXPublicKey(pk)
 }
 
 func (p *party) SetShareData(shareData []byte) error {
@@ -171,9 +201,9 @@ func (p *party) SetShareData(shareData []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed deserializing shares: %w", err)
 	}
-	localSaveData.EDDSAPub.SetCurve(tss.Edwards())
+	localSaveData.ECDSAPub.SetCurve(elliptic.P256())
 	for _, xj := range localSaveData.BigXj {
-		xj.SetCurve(tss.Edwards())
+		xj.SetCurve(elliptic.P256())
 	}
 	p.shareData = &localSaveData
 	return nil
@@ -182,7 +212,7 @@ func (p *party) SetShareData(shareData []byte) error {
 func (p *party) Init(parties []uint16, threshold int, sendMsg func(msg []byte, isBroadcast bool, to uint16)) {
 	partyIDs := partyIDsFromNumbers(parties)
 	ctx := tss.NewPeerContext(partyIDs)
-	p.params = tss.NewParameters(tss.Edwards(), ctx, p.id, len(parties), threshold)
+	p.params = tss.NewParameters(elliptic.P256(), ctx, p.id, len(parties), threshold)
 	p.id.Index = p.locatePartyIndex(p.id)
 	p.sendMsg = sendMsg
 	p.closeChan = make(chan struct{})
@@ -203,13 +233,13 @@ func (p *party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 		return nil, fmt.Errorf("must call SetShareData() before attempting to sign")
 	}
 	//p.logger.Debugf("Starting signing")
-	defer func() {}()
+	defer func() {}() //p.logger.Debugf("")
 
 	defer close(p.closeChan)
 
 	end := make(chan *common.SignatureData, 1)
 
-	msgToSign := big.NewInt(0).SetBytes(msgHash)
+	msgToSign := hashToInt(msgHash, elliptic.P256())
 	party := signing.NewLocalParty(msgToSign, p.params, *p.shareData, p.out, end)
 
 	var endWG sync.WaitGroup
@@ -243,8 +273,11 @@ func (p *party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 			sig.R.SetBytes(sigOut.R)
 			sig.S.SetBytes(sigOut.S)
 
-			s := &edwards.Signature{R: sig.R, S: sig.S}
-			return s.Serialize(), nil
+			sigRaw, err := asn1.Marshal(sig)
+			if err != nil {
+				return nil, fmt.Errorf("failed marshaling ECDSA signature: %w", err)
+			}
+			return sigRaw, nil
 		case msg := <-p.in:
 			raw, routing, err := msg.WireBytes()
 			if err != nil {
@@ -263,12 +296,23 @@ func (p *party) Sign(ctx context.Context, msgHash []byte) ([]byte, error) {
 
 func (p *party) KeyGen(ctx context.Context) ([]byte, error) {
 	//p.logger.Debugf("Starting DKG")
-	defer func() {}()
+	defer func() {}() //p.logger.Debugf("")
 
 	defer close(p.closeChan)
 
+	preParamGenTimeout := defaultSafePrimeGenTimeout
+
+	deadline, deadlineExists := ctx.Deadline()
+	if deadlineExists {
+		preParamGenTimeout = deadline.Sub(time.Now())
+	}
+	preParams, err := keygen.GeneratePreParams(preParamGenTimeout)
+	if err != nil {
+		panic(err)
+	}
+
 	end := make(chan *keygen.LocalPartySaveData, 1)
-	party := keygen.NewLocalParty(p.params, p.out, end)
+	party := keygen.NewLocalParty(p.params, p.out, end, *preParams)
 
 	var endWG sync.WaitGroup
 	endWG.Add(1)
@@ -331,32 +375,24 @@ func (p *party) sendMessages() {
 	}
 }
 
+// hashToInt is taken as-is from the Go ECDSA standard library
+func hashToInt(hash []byte, c elliptic.Curve) *big.Int {
+	orderBits := c.Params().N.BitLen()
+	orderBytes := (orderBits + 7) / 8
+	if len(hash) > orderBytes {
+		hash = hash[:orderBytes]
+	}
+
+	ret := new(big.Int).SetBytes(hash)
+	excess := len(hash)*8 - orderBits
+	if excess > 0 {
+		ret.Rsh(ret, uint(excess))
+	}
+	return ret
+}
+
 func digest(in []byte) []byte {
 	h := sha256.New()
 	h.Write(in)
 	return h.Sum(nil)
-}
-
-// copyBytes copies a byte slice to a 32 byte array.
-func copyBytes(aB []byte) *[32]byte {
-	if aB == nil {
-		return nil
-	}
-	s := new([32]byte)
-
-	// If we have a short byte string, expand
-	// it so that it's long enough.
-	aBLen := len(aB)
-	if aBLen < 32 {
-		diff := 32 - aBLen
-		for i := 0; i < diff; i++ {
-			aB = append([]byte{0x00}, aB...)
-		}
-	}
-
-	for i := 0; i < 32; i++ {
-		s[i] = aB[i]
-	}
-
-	return s
 }
